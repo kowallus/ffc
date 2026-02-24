@@ -36,16 +36,15 @@ block_meta_t FASTA_Compress::init_block(int32_t b, char* prev_block) {
     return block_meta;
 }
 
-int64_t FASTA_Compress::remove_EOLs_and_find_eols_period(char *seq, int64_t& seq_len, int8_t chunk_size,
-        int64_t& tail_len, bool ignore_first_EOL_period, int32_t declared_first_eol_pos) {
+int32_t FASTA_Compress::remove_EOLs_and_find_tail(char *seq, int32_t& seq_len, int8_t chunk_size,
+    int32_t& seq_line_length, int32_t& max_seq_without_eols_length, bool ignore_first_EOL_period, int32_t declared_first_eol_pos) {
     if (seq_len == 0)
         return 0;
-    int64_t eols_diff = 0;
-    int64_t first_eol_pos = -1;
-    int64_t last_eol_pos = -1;
-    int64_t count = 0;
-    int64_t i = 0;
-    int64_t last_move_pos = 0;
+    int32_t last_eol_pos = -1;
+    int32_t count = 0;
+    int32_t i = 0;
+    int32_t last_move_pos = 0;
+    int32_t tail_len = 0;
 
     while (i + 7 < seq_len) {
         uint64_t tmp;
@@ -58,14 +57,24 @@ int64_t FASTA_Compress::remove_EOLs_and_find_eols_period(char *seq, int64_t& seq
             for (int64_t i_end = i + 8; i < i_end; i++) {
                 if (seq[i] == '\n') {
                     if (!ignore_first_EOL_period || last_eol_pos != -1) {
-                        if (eols_diff == 0)
-                            eols_diff = i != seq_len - 1 ? i - last_eol_pos : 0;
-                        else if (eols_diff != i - last_eol_pos && (i != seq_len - 1 || eols_diff < i - last_eol_pos)) {
-                            restore_EOLs(seq, i - count, first_eol_pos, last_eol_pos, eols_diff);
-                            return INCONSISTENT_EOLS;
+                        int32_t current_line_length = i - last_eol_pos - 1;
+                        bool eol_before_header = i == seq_len - 1;
+                        if (seq_line_length == 0) {
+                            if (current_line_length < max_seq_without_eols_length) {
+                                tail_len = seq_len - i;
+                                seq_len = i;
+                                break;
+                            }
+                            seq_line_length = eol_before_header ? 0 : current_line_length;
+                        } else if (seq_line_length != current_line_length && (!eol_before_header || seq_line_length < current_line_length)) {
+                            while (current_line_length-- > seq_line_length) {
+                                i--;
+                                seq[i] = seq[i - count];
+                            }
+                            tail_len = seq_len - i;
+                            seq_len = i;
+                            break;
                         }
-                    } else {
-                        first_eol_pos = i;
                     }
                     last_eol_pos = i < seq_len - 1 ? i : last_eol_pos;
                     count++;
@@ -81,90 +90,66 @@ int64_t FASTA_Compress::remove_EOLs_and_find_eols_period(char *seq, int64_t& seq
     }
     memmove(seq + last_move_pos - count, seq + last_move_pos, i - last_move_pos);
 
-    for (; i < seq_len; i++) {
+    for (; !tail_len && i < seq_len; i++) {
         if (seq[i] == '\n') {
-            if (!ignore_first_EOL_period || last_eol_pos != -1)
-                if (eols_diff == 0)
-                    eols_diff = (i != seq_len - 1 ? i - last_eol_pos : 0);
-                else if (eols_diff != i - last_eol_pos && (i != seq_len - 1 || eols_diff < i - last_eol_pos)) {
-                    restore_EOLs(seq, i - count, first_eol_pos, last_eol_pos, eols_diff);
-                    return INCONSISTENT_EOLS;
+            if (!ignore_first_EOL_period || last_eol_pos != -1) {
+                int32_t current_line_length = i - last_eol_pos - 1;
+                bool eol_before_header = i == seq_len - 1;
+                if (seq_line_length == 0) {
+                    if (current_line_length < max_seq_without_eols_length) {
+                        tail_len = seq_len - i;
+                        seq_len = i;
+                        break;
+                    }
+                    seq_line_length = eol_before_header ? 0 : current_line_length;
+                } else if (seq_line_length != current_line_length && (!eol_before_header || seq_line_length < current_line_length)) {
+                    while (current_line_length-- > seq_line_length) {
+                        i--;
+                        seq[i] = seq[i - count];
+                    }
+                    tail_len = seq_len - i;
+                    seq_len = i;
+                    break;
                 }
+            }
             last_eol_pos = i < seq_len - 1 ? i : last_eol_pos;
             count++;
         } else
             seq[i - count] = seq[i];
     }
+    if (!tail_len && seq[i - 1] != '\n') {
+        int32_t current_line_length = i - last_eol_pos - 1;
+        if (seq_line_length < current_line_length) {
+            while (current_line_length-- > seq_line_length) {
+                i--;
+                seq[i] = seq[i - count];
+            }
+            tail_len = seq_len - i;
+            seq_len = i;
+        }
+    }
     seq_len -= count;
-    int64_t seq_end = (seq_len / chunk_size) * chunk_size;
-    int64_t tail_end = i;
+    int32_t seq_end = (seq_len / chunk_size) * chunk_size;
+    int32_t tail_end = i;
     if (i && seq[i - 1] == '\n')
         i--;
 
     while (seq_len > seq_end) {
         while (declared_first_eol_pos < i-- && i == last_eol_pos) {
             seq[i] = '\n';
-            last_eol_pos -= eols_diff == 0 ? last_eol_pos : eols_diff;
+            last_eol_pos -= seq_line_length == 0 ? last_eol_pos : seq_line_length + 1;
         }
         seq[i] = seq[--seq_len];
     }
     if (i && i - 1 == last_eol_pos) {
         seq[--i] = '\n';
     }
-    tail_len = tail_end - i;
+    tail_len += tail_end - i;
 
-    return eols_diff;
-}
+    if (seq_line_length == 0 && max_seq_without_eols_length <= seq_len)
+        max_seq_without_eols_length = seq_len - (ignore_first_EOL_period ? declared_first_eol_pos : 0);
 
-void FASTA_Compress::restore_EOLs(char *seq, int64_t chunked_len, int64_t first_eol_pos, int64_t last_eol_pos, int64_t eols_period) {
-    if (first_eol_pos == -1)
-        first_eol_pos += eols_period;
-    int64_t eols_count = (last_eol_pos - first_eol_pos) / eols_period + 1;
-    int64_t end_pos = chunked_len + eols_count;
-    while (eols_count > 0) {
-        int64_t beg_pos = last_eol_pos + 1;
-        memmove(seq + beg_pos , seq + beg_pos - eols_count, end_pos - beg_pos);
-        seq[last_eol_pos] = '\n';
-        eols_count--;
-        end_pos = last_eol_pos;
-        last_eol_pos -= eols_period;
-    }
-}
-
-void FASTA_Compress::restore_EOLs_in_sequences(char *seq, int64_t len, int64_t first_eol_pos, int64_t eols_period,
-        bool block_starts_with_header) {
-    if (eols_period == 1)
-        return;
-    char* guard = seq + len;
-    eols_period = eols_period ? eols_period : INT32_MAX;
-    if (first_eol_pos == -1)
-        first_eol_pos += eols_period;
-    if (block_starts_with_header) {
-        seq = find(seq, guard, '\n') + 1;
-        first_eol_pos = eols_period - 1;
-    }
-    while (seq < guard) {
-        char* header_pos = find(seq, guard, header_symbol);
-        while (header_pos < guard && header_pos[-1] != '\n')
-            header_pos = find(header_pos + 1, guard, header_symbol);
-        int64_t seq_len = header_pos - seq;
-        if (header_pos[-1] == '\n')
-            seq_len--;
-        int64_t eols_count = first_eol_pos < seq_len ? (seq_len - first_eol_pos) / eols_period + 1 : 0;
-        int64_t last_eol_pos = first_eol_pos + (eols_count - 1) * eols_period;
-        int64_t chunked_len = (seq_len - eols_count) / CHUNK_SIZE * CHUNK_SIZE;
-        int64_t restored_eols = (first_eol_pos < chunked_len ? 1 + (chunked_len - first_eol_pos) / (eols_period - 1) : 0);
-        while (restored_eols < eols_count) {
-            if (last_eol_pos >= seq_len)
-                chunked_len = (seq_len - restored_eols) / CHUNK_SIZE * CHUNK_SIZE;
-            last_eol_pos -= eols_period;
-            restored_eols = (first_eol_pos < chunked_len ? 1 + (chunked_len - first_eol_pos) / (eols_period - 1) : 0);
-            eols_count--;
-        }
-        restore_EOLs(seq, chunked_len, first_eol_pos, last_eol_pos, eols_period);
-        seq = find(header_pos, guard, '\n') + 1;
-        first_eol_pos = eols_period - 1;
-    }
+    return tail_len;
 }
 
 template<bool binary>
@@ -184,13 +169,18 @@ inline uint8_t FASTA_Compress::pack_dna_naive(char *chunk) {
 }
 
 template<typename E>
-int64_t FASTA_Compress::compress_stream(char* dest, vector<E>& stream, int32_t compression_flag) {
+int64_t FASTA_Compress::compress_stream(int t_id, char* dest, vector<E>& stream, int32_t compression_flag, int32_t window_size_log) {
     size_t stream_header_size_in_E = (STREAM_HEADER_BYTES + sizeof(E) - 1) / sizeof(E);
     size_t compressed_size = STREAM_HEADER_BYTES + (stream.size() - stream_header_size_in_E) * sizeof(E);
     size_t uncompressed_bytes = (stream.size() - 1) * sizeof(E);
     if (compression_flag) {
         size_t compressed_size_bound = ZSTD_compressBound(uncompressed_bytes);
-        compressed_size = ZSTD_compress(dest + STREAM_HEADER_BYTES, compressed_size_bound,
+        ZSTD_CCtx_setParameter(thread_zsdt_cctx[t_id], ZSTD_c_enableLongDistanceMatching, window_size_log != 0);
+        if (window_size_log != 0) {
+            ZSTD_CCtx_setParameter(thread_zsdt_cctx[t_id], ZSTD_c_windowLog, window_size_log);
+        }
+        ZSTD_CCtx_setParameter(thread_zsdt_cctx[t_id], ZSTD_c_compressionLevel, compression_flag);
+        compressed_size = ZSTD_compress2(thread_zsdt_cctx[t_id], dest + STREAM_HEADER_BYTES, compressed_size_bound,
             stream.data() + stream_header_size_in_E, uncompressed_bytes, compression_flag);
         compressed_size++;
     } else {
@@ -200,13 +190,18 @@ int64_t FASTA_Compress::compress_stream(char* dest, vector<E>& stream, int32_t c
     return compressed_size;
 }
 
-int64_t FASTA_Compress::compress_stream(char* dest, char* src, size_t srcSize, int32_t compression_flag) {
+int64_t FASTA_Compress::compress_stream(int t_id, char* dest, char* src, size_t srcSize, int32_t compression_flag, int32_t window_size_log) {
     size_t compressed_size = srcSize;
     size_t uncompressed_bytes = srcSize - 1;
     if (compression_flag) {
         size_t compressed_size_bound = ZSTD_compressBound(uncompressed_bytes);
-        compressed_size = ZSTD_compress(dest + STREAM_HEADER_BYTES, compressed_size_bound,
-            src + STREAM_HEADER_BYTES, uncompressed_bytes, compression_flag);
+        ZSTD_CCtx_setParameter(thread_zsdt_cctx[t_id], ZSTD_c_enableLongDistanceMatching, window_size_log != 0);
+        if (window_size_log != 0) {
+            ZSTD_CCtx_setParameter(thread_zsdt_cctx[t_id], ZSTD_c_windowLog, window_size_log);
+        }
+        ZSTD_CCtx_setParameter(thread_zsdt_cctx[t_id], ZSTD_c_compressionLevel, compression_flag);
+        compressed_size = ZSTD_compress2(thread_zsdt_cctx[t_id], dest + STREAM_HEADER_BYTES, compressed_size_bound,
+            src + STREAM_HEADER_BYTES, uncompressed_bytes);
         compressed_size++;
     } else {
         memcpy(dest + STREAM_HEADER_BYTES, src + STREAM_HEADER_BYTES, uncompressed_bytes);
@@ -236,6 +231,7 @@ void FASTA_Compress::compress_block(int32_t b) {
         thread_raw[t_id] = new char[STREAM_HEADER_BYTES + ffc_header.max_block_size];
         thread_mix[t_id] = new char[STREAM_HEADER_BYTES + ffc_header.max_block_size];
         thread_subblocks_meta[t_id] = new uint32_t[STREAM_HEADER_BYTES + ffc_header.max_block_size / 2];
+        thread_zsdt_cctx[t_id] = ZSTD_createCCtx();
     }
     char* input_data = thread_block[t_id];
     char* case_mask = thread_case_mask[t_id];
@@ -258,7 +254,7 @@ void FASTA_Compress::compress_block(int32_t b) {
     int64_t block_length = block_meta.block_length;
 
     int32_t first_EOL_pos = find(ptr, ptr + block_length, '\n') - ptr;
-    int32_t max_seq_line_length = 0;
+    int32_t max_seq_without_eols_length = MIN_SEQ_LINE_LENGTH;
     char* guard = ptr + block_length;
 
     uint64_t *casePtr = (uint64_t*) (case_mask + 1);
@@ -283,7 +279,7 @@ void FASTA_Compress::compress_block(int32_t b) {
 
         char* header_pos = find(ptr, guard, header_symbol);
         while (header_pos < guard &&
-            (header_pos == input_data ? block_start_status != BLOCK_STARTS_JUST_AFTER_EOL : header_pos[-1] != '\n'))
+            (header_pos == input_data ? block_start_status != BLOCK_STARTS_JUST_AFTER_EOL : header_pos[-1] != '\n' && header_pos[-1] != '\0'))
             header_pos = find(header_pos + 1, guard, header_symbol);
 
         // Stage 1 - Uppercase sequence except for a short tail
@@ -304,65 +300,19 @@ void FASTA_Compress::compress_block(int32_t b) {
 
         // Stage 2 - EOL removal and storing line length + 1
 
-        int64_t sequence_length = header_pos - ptr;
-        int64_t tail_length = 0;
+        int32_t sequence_without_tail_length = header_pos - ptr;
+        int32_t tail_with_eols_length = 0;
         if (!irregular_EOLs_mode) {
             bool ignore_first_EOL_period = block_meta.first_EOL_offset >= ptr - input_data;
             int32_t declared_first_EOL_offset = block_meta.first_EOL_offset >= ptr - input_data ?
                 block_meta.first_EOL_offset - (ptr - input_data) : -1;
-            int current_eols_period = remove_EOLs_and_find_eols_period(ptr, sequence_length,
-                CHUNK_SIZE, tail_length, ignore_first_EOL_period, declared_first_EOL_offset);
-
-            if (block_meta.seq_line_length == 0) {
-                if (current_eols_period == INCONSISTENT_EOLS) {
-                    restore_EOLs_in_sequences(input_data, ptr - input_data, first_EOL_pos, 0, block_start_status == BLOCK_STARTS_INSIDE_HEADER
-                        || (block_start_status == BLOCK_STARTS_JUST_AFTER_EOL && input_data[0] == header_symbol));
-                    block_meta.seq_line_length = INCONSISTENT_EOLS;
-                } else if (current_eols_period == 0) {
-                    if (max_seq_line_length <= sequence_length)
-                        max_seq_line_length = sequence_length - (ignore_first_EOL_period ? declared_first_EOL_offset : 0);
-                    else
-                        block_meta.seq_line_length = INCONSISTENT_EOLS;
-                } else {
-                    block_meta.seq_line_length = current_eols_period - 1;
-                    if (max_seq_line_length > block_meta.seq_line_length) {
-                        int64_t eols_count = sequence_length / (current_eols_period - 1);
-                        int64_t last_eol_pos = -1 + eols_count * current_eols_period;
-                        restore_EOLs(ptr, sequence_length, -1, last_eol_pos, current_eols_period);
-                        block_meta.seq_line_length = INCONSISTENT_EOLS;
-                    }
-                }
-            } else if ((current_eols_period || sequence_length > block_meta.seq_line_length)
-                && current_eols_period != block_meta.seq_line_length + 1) {
-                restore_EOLs_in_sequences(input_data, ptr - input_data, first_EOL_pos,
-                    block_meta.seq_line_length + 1, block_start_status == BLOCK_STARTS_INSIDE_HEADER
-                    || (block_start_status == BLOCK_STARTS_JUST_AFTER_EOL && input_data[0] == header_symbol));
-                if (current_eols_period)
-                {
-                    int64_t eols_count = sequence_length / (current_eols_period - 1);
-                    int64_t last_eol_pos = -1 + eols_count * current_eols_period;
-                    restore_EOLs(ptr, sequence_length, -1, last_eol_pos, current_eols_period);
-                }
-                block_meta.seq_line_length = INCONSISTENT_EOLS;
-            }
-            if (block_meta.seq_line_length == INCONSISTENT_EOLS) {
-                static bool message_done = false;
-                if (!message_done) {
-                    *PgHelpers::verboseout << "Inconsistent EOLs in sequences detected." << endl;
-                    message_done = true;
-                }
-                cerr.flush();
-                block_meta.seq_line_length = 0;
-                block_meta.first_EOL_offset = block_start_status;
-                PgHelpers::convert_to_proper_case((uint8_t*) case_mask + 1, input_data, caseChunkPtr - input_data);
-                compress_block<true>(b);
-                return;
-            }
+            tail_with_eols_length = remove_EOLs_and_find_tail(ptr, sequence_without_tail_length, CHUNK_SIZE,
+                block_meta.seq_line_length, max_seq_without_eols_length, ignore_first_EOL_period, declared_first_EOL_offset);
         } else {
-            tail_length = sequence_length % CHUNK_SIZE;
+            tail_with_eols_length = sequence_without_tail_length % CHUNK_SIZE;
         }
 
-        int64_t number_of_chunks = sequence_length / CHUNK_SIZE;
+        int64_t number_of_chunks = sequence_without_tail_length / CHUNK_SIZE;
         uint64_t* chunkPtr = (uint64_t*) ptr;
         uint64_t* guardPtr = chunkPtr + number_of_chunks;
         uint64_t* subPtr = chunkPtr;
@@ -407,9 +357,9 @@ void FASTA_Compress::compress_block(int32_t b) {
             }
         }
 
-        uint32_t raw_length = tail_length;
-        memcpy(raw + raw_pos, header_pos - tail_length, tail_length);
-        raw_pos += tail_length;
+        uint32_t raw_length = tail_with_eols_length;
+        memcpy(raw + raw_pos, header_pos - tail_with_eols_length, tail_with_eols_length);
+        raw_pos += tail_with_eols_length;
         ptr = header_pos;
         if (ptr < guard) {
             block_meta.headers_count++;
@@ -437,15 +387,15 @@ void FASTA_Compress::compress_block(int32_t b) {
 
     char* streamsPtr = thread_all_streams[t_id];
 
-    block_meta.case_mask_compressed_size = compress_stream(streamsPtr, case_mask, total_number_of_case_chunks * 8 + STREAM_HEADER_BYTES, ffc_header.case_compression_flag);
+    block_meta.case_mask_compressed_size = compress_stream(t_id, streamsPtr, case_mask, total_number_of_case_chunks * 8 + STREAM_HEADER_BYTES, ffc_header.case_compression_flag);
     streamsPtr += block_meta.case_mask_compressed_size;
-    block_meta.raw_stream_compressed_size = compress_stream(streamsPtr, raw, raw_pos, ffc_header.raw_compression_flag);
+    block_meta.raw_stream_compressed_size = compress_stream(t_id, streamsPtr, raw, raw_pos, ffc_header.raw_compression_flag);
     streamsPtr += block_meta.raw_stream_compressed_size;
-    block_meta.dna_stream_compressed_size = compress_stream(streamsPtr, dna, dna_pos, ffc_header.dna_compression_flag);
+    block_meta.dna_stream_compressed_size = compress_stream(t_id, streamsPtr, dna, dna_pos, ffc_header.dna_compression_flag, long_matching_window_size_log);
     streamsPtr += block_meta.dna_stream_compressed_size;
-    block_meta.mix_stream_compressed_size = compress_stream(streamsPtr, mix, mix_pos, ffc_header.mix_compression_flag);
+    block_meta.mix_stream_compressed_size = compress_stream(t_id, streamsPtr, mix, mix_pos, ffc_header.mix_compression_flag);
     streamsPtr += block_meta.mix_stream_compressed_size;
-    block_meta.subblocks_meta_compressed_size = compress_stream(streamsPtr, ((char*) subblocks_meta) + (sizeof(uint32_t) - STREAM_HEADER_BYTES),
+    block_meta.subblocks_meta_compressed_size = compress_stream(t_id, streamsPtr, ((char*) subblocks_meta) + (sizeof(uint32_t) - STREAM_HEADER_BYTES),
         (subblocks_pos - STREAM_HEADER_BYTES) * sizeof(uint32_t) + STREAM_HEADER_BYTES, ffc_header.subblocks_meta_compression_flag);;
 
     block_meta.block_compressed_length = (uint32_t) block_meta.case_mask_compressed_size +
@@ -507,7 +457,7 @@ void FASTA_Compress::compress_parallel(const string input_filename, const string
         inStream = new ifstream(input_filename, ios_base::in | ios::binary);
         if (!*inStream) {
             cerr << "Error: unable to open input file: " << input_filename << endl;
-            exit(1);
+            exit(EXIT_FAILURE);
         }
     }
     
@@ -530,6 +480,7 @@ void FASTA_Compress::compress_parallel(const string input_filename, const string
     thread_dna.resize(PgHelpers::numberOfThreads, nullptr);
     thread_mix.resize(PgHelpers::numberOfThreads, nullptr);
     thread_subblocks_meta.resize(PgHelpers::numberOfThreads, nullptr);
+    thread_zsdt_cctx.resize(PgHelpers::numberOfThreads, nullptr);
 
     int64_t headers_count = 0;
 
@@ -626,6 +577,7 @@ void FASTA_Compress::compress_parallel(const string input_filename, const string
         delete [] thread_raw[t];
         delete [] thread_mix[t];
         delete [] thread_subblocks_meta[t];
+        ZSTD_freeCCtx(thread_zsdt_cctx[t]);
     }
 
     *PgHelpers::appout << "Input file size: " << ffc_stats.original_file_size << " bytes" << endl;
@@ -637,7 +589,8 @@ int compress(
     string input_filename, 
     string output_filename,
     int level,
-    int block_size_order
+    int block_size_order,
+    bool longMatchingFlag
 ) {
     ffc_header_t ffc_header;
     ffc_header.ffc_header = 0x6366662e;
@@ -666,10 +619,11 @@ int compress(
     *PgHelpers::appout << "Threads: " << PgHelpers::numberOfThreads << endl;
     *PgHelpers::appout << "Level: " << (level == ADAPTIVE_DNA_COMPRESSION_LEVEL ? "adaptive" : to_string(level)) << endl;
     *PgHelpers::appout << "Block size order: " << block_size_order << endl;
+    *PgHelpers::appout << "Long matching: " << (longMatchingFlag ? "enabled" : "disabled")<< endl;
 
     ffc_header.max_block_size = 1 << block_size_order;
     if (block_size_order == 30)
-        ffc_header.max_block_size--;
+        ffc_header.max_block_size -= CASE_CHUNK_SIZE;
     if (level != ADAPTIVE_DNA_COMPRESSION_LEVEL) {
         ffc_header.case_compression_flag = level;
         ffc_header.raw_compression_flag = level;
@@ -691,7 +645,7 @@ int compress(
     }
     auto stopWatch = PgHelpers::time_checkpoint();
 
-    FASTA_Compress compressor(ffc_header);
+    FASTA_Compress compressor(ffc_header, longMatchingFlag ? block_size_order : 0);
     compressor.compress_parallel(
         input_filename,
         output_filename

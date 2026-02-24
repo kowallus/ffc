@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstring>
 #include "ffc_structures.hpp"
+#include "lib/zstd.h"
 #include "utils/helper.h"
 
 using namespace std;
@@ -18,13 +19,15 @@ private:
 
     constexpr static int32_t INCONSISTENT_EOLS = -1;
 
+    constexpr static int32_t MIN_SEQ_LINE_LENGTH = 4;
+
     constexpr static uint64_t EIGHT_EOLS = 0x0A0A0A0A0A0A0A0A;
 
     constexpr static float ADAPTIVE_DNA_THRESHOLD_RATIO = 1.25;
 
     template<typename E>
-    int64_t compress_stream(char* dest, vector<E>& stream, int32_t compression_flag);
-    int64_t compress_stream(char* dest, char* src, size_t srcSize, int32_t compression_flag);
+    int64_t compress_stream(int t_id, char* dest, vector<E>& stream, int32_t compression_flag, int32_t window_size_log = 0);
+    int64_t compress_stream(int t_id, char* dest, char* src, size_t srcSize, int32_t compression_flag, int32_t window_size_log = 0);
 
     // enum block type mapping
     enum class BLOCK_TYPE_MAPPING {
@@ -36,13 +39,12 @@ private:
 
     char header_symbol = '>';
 
+    int long_matching_window_size_log;
+
     block_meta_t init_block(int32_t b, char* prev_block);
 
-    inline int64_t remove_EOLs_and_find_eols_period(char *seq, int64_t& seq_len, int8_t chunk_size,
-        int64_t& tail_len, bool ignore_first_EOL_period, int32_t declared_first_eol_pos);
-    void restore_EOLs(char* seq, int64_t chunked_len, int64_t first_eol_pos, int64_t last_eol_pos, int64_t eols_period);
-    void restore_EOLs_in_sequences(char *seq, int64_t len, int64_t first_eol_pos, int64_t eols_period,
-        bool block_starts_with_header);
+    inline int32_t remove_EOLs_and_find_tail(char *seq, int32_t& seq_len, int8_t chunk_size,
+        int32_t& seq_line_length, int32_t& max_seq_without_eols_length, bool ignore_first_EOL_period, int32_t declared_first_eol_pos);
 
     template<bool binary>
     inline bool all_ACGT(uint64_t chunk);
@@ -59,6 +61,7 @@ private:
     vector<char*> thread_mix;
     vector<uint32_t*> thread_subblocks_meta;
     vector<char*> thread_all_streams;
+    vector<ZSTD_CCtx_s*> thread_zsdt_cctx;
 
     int get_thread_id(int32_t b) const {
         return b % PgHelpers::numberOfThreads;
@@ -74,7 +77,8 @@ private:
 
 public:
 
-    FASTA_Compress(const ffc_header_t& ffc_header): ffc_header(ffc_header) {
+    FASTA_Compress(const ffc_header_t& ffc_header, int long_matching_window_size_log): ffc_header(ffc_header),
+        long_matching_window_size_log(long_matching_window_size_log) {
     }
 
     ~FASTA_Compress() {
@@ -88,7 +92,8 @@ int compress(
     string input_filename, 
     string output_filename,
     int level,
-    int block_size_order
+    int block_size_order,
+    bool longMatchingFlag
 );
 
 #endif //FASTACOMPRESS_H

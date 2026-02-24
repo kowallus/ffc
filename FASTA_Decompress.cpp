@@ -100,19 +100,18 @@ void FASTA_Decompress::decompress_block(
 ) {
     int t_id = get_thread_id(b);
     block_meta_t &block_meta = thread_blocks_meta[t_id];
+    validate_block_meta(block_meta);
     if (thread_buf[t_id] == nullptr) {
         thread_buf[t_id] = new char[8 + BUFFER_SIZE + 8]; // bytes for additional EOL and case routines
         thread_block[t_id] = new char[ffc_header.max_block_size + 8];
-        int64_t number_of_case_chunks = (ffc_header.max_block_size + (CASE_CHUNK_SIZE - 1)) / CASE_CHUNK_SIZE;
-        thread_case_mask[t_id] = new char[STREAM_HEADER_BYTES + number_of_case_chunks * 8];
-        thread_dna[t_id] = new char[STREAM_HEADER_BYTES + ffc_header.max_block_size / 4];
-        thread_raw[t_id] = new char[STREAM_HEADER_BYTES + ffc_header.max_block_size];
-        thread_mix[t_id] = new char[STREAM_HEADER_BYTES + ffc_header.max_block_size];
-        thread_subblocks_meta[t_id] = new uint32_t[STREAM_HEADER_BYTES + ffc_header.max_block_size / 2];
+        thread_case_mask[t_id] = new char[case_mask_compessed_stream_max_length];
+        thread_dna[t_id] = new char[dna_compessed_stream_max_length];
+        thread_raw[t_id] = new char[raw_compessed_stream_max_length];
+        thread_mix[t_id] = new char[mix_compessed_stream_max_length];
+        thread_subblocks_meta[t_id] = new uint32_t[subblocks_compessed_stream_max_length];
     }
     char* buf = thread_buf[t_id] + 8;
     char* block = thread_block[t_id];
-    int chunk_size = ffc_header.chunk_size;
 
     if (!sequential_input) {
         if (thread_all_streams[t_id] == nullptr)
@@ -125,7 +124,6 @@ void FASTA_Decompress::decompress_block(
     }
     uint8_t *source_stream = (uint8_t *) thread_all_streams[t_id];
 
-    const int64_t CASE_CHUNK_SIZE = chunk_size * 8;
     int64_t number_of_chunks = (block_meta.block_length + (CASE_CHUNK_SIZE - 1)) / CASE_CHUNK_SIZE;
     uint8_t* case_mask_buff = source_stream;
     uint8_t *case_mask_stream = (uint8_t *)open_stream(
@@ -291,7 +289,7 @@ void FASTA_Decompress::decompress_parallel(const string input_filename, const st
         inStream = new ifstream(input_filename, ios_base::in | ios::binary);
         if (!*inStream) {
             cerr << "Error: unable to open input file: " << input_filename << endl;
-            exit(1);
+            exit(EXIT_FAILURE);
         }
     }
 
@@ -302,6 +300,8 @@ void FASTA_Decompress::decompress_parallel(const string input_filename, const st
         ffc_size = inStream->tellg() - ffc_size;
         inStream->seekg( ffc_size - sizeof(ffc_stats_t), std::ios::beg );
         inStream->read((char*) &ffc_stats, sizeof(ffc_stats_t));
+        validate_ffc_stats(ffc_stats);
+
         inStream->seekg( 0, std::ios::beg );
 
         if (input_filename != STANDARD_IO_POSIX_ALIAS){
@@ -334,7 +334,7 @@ void FASTA_Decompress::decompress_parallel(const string input_filename, const st
         if (!*outStream) {
             cerr << "Error: unable to open output file: " << output_filename << endl;
             cerr.flush();
-            exit(1);
+            exit(EXIT_FAILURE);
         }
         if (!output_exists && !sequential_output) {
             outStream->seekp(ffc_stats.original_file_size - 1);
@@ -366,6 +366,13 @@ void FASTA_Decompress::decompress_parallel(const string input_filename, const st
     thread_dna.resize(PgHelpers::numberOfThreads, nullptr);
     thread_mix.resize(PgHelpers::numberOfThreads, nullptr);
     thread_subblocks_meta.resize(PgHelpers::numberOfThreads, nullptr);
+
+    int64_t number_of_case_chunks = (ffc_header.max_block_size + (CASE_CHUNK_SIZE - 1)) / CASE_CHUNK_SIZE;
+    case_mask_compessed_stream_max_length = STREAM_HEADER_BYTES + number_of_case_chunks * 8;
+    dna_compessed_stream_max_length = STREAM_HEADER_BYTES + ffc_header.max_block_size / 4;
+    raw_compessed_stream_max_length = STREAM_HEADER_BYTES + ffc_header.max_block_size;
+    mix_compessed_stream_max_length = STREAM_HEADER_BYTES + ffc_header.max_block_size;
+    subblocks_compessed_stream_max_length = STREAM_HEADER_BYTES + ffc_header.max_block_size / 2;
 
     std::vector<std::future<void>> block_threads;
     int64_t blocks_count = 0;
@@ -425,6 +432,30 @@ void FASTA_Decompress::decompress_parallel(const string input_filename, const st
         delete [] thread_dna[t];
         delete [] thread_mix[t];
         delete [] thread_subblocks_meta[t];
+    }
+}
+
+void FASTA_Decompress::validate_block_meta(const block_meta_t& block_meta)
+{
+    if (block_meta.case_mask_compressed_size < 0 || block_meta.case_mask_compressed_size > case_mask_compessed_stream_max_length
+        || block_meta.dna_stream_compressed_size < 0 || block_meta.dna_stream_compressed_size > dna_compessed_stream_max_length
+        || block_meta.mix_stream_compressed_size < 0 || block_meta.mix_stream_compressed_size > mix_compessed_stream_max_length
+        || block_meta.raw_stream_compressed_size < 0 || block_meta.raw_stream_compressed_size > raw_compessed_stream_max_length
+        || block_meta.subblocks_meta_compressed_size < 0 || block_meta.subblocks_meta_compressed_size > subblocks_compessed_stream_max_length * sizeof(uint32_t)) {
+        cerr << "Error: archive is corrupted" << endl;
+        exit(EXIT_FAILURE);
+        }
+}
+
+
+void FASTA_Decompress::validate_ffc_stats(const ffc_stats_t& ffc_stats)
+{
+    if (ffc_stats.blocks_count < 0 || ffc_stats.blocks_count > ((int64_t) 1 << 40)
+        || ffc_stats.number_of_sequences < 0 || ffc_stats.number_of_sequences > ((int64_t) 1 << 50)
+        || ffc_stats.original_file_size < 0 || ffc_stats.original_file_size > ((int64_t) 1 << 60)
+        || ffc_stats.streams_size < 0 || ffc_stats.streams_size > ((int64_t) 1 << 60)) {
+        cerr << "Error: archive is corrupted" << endl;
+        exit(EXIT_FAILURE);
     }
 }
 

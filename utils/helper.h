@@ -403,9 +403,16 @@ namespace PgHelpers {
     ) {
         std::filesystem::path out_path = std::filesystem::absolute(output_filename);
         std::filesystem::path dir = out_path.parent_path();
-        if (dir.empty()) dir = std::filesystem::current_path();
+        if (dir.empty()) return true;
 
-        auto info = std::filesystem::space(dir);
+        std::error_code ec;
+        std::filesystem::space_info info = std::filesystem::space(dir, ec);
+
+        if (ec) {
+            cerr << "WARNING: Cannot determine free disk space (error code: " <<  ec.value() << ")";
+            return true;
+        }
+
         return info.available >= size_in_bytes;
     }
 

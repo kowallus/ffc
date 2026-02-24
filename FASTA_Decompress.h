@@ -33,6 +33,12 @@ private:
     vector<char*> thread_buf;
     vector<char*> thread_block;
 
+    uint32_t case_mask_compessed_stream_max_length = 0;
+    uint32_t raw_compessed_stream_max_length = 0;
+    uint32_t dna_compessed_stream_max_length = 0;
+    uint32_t mix_compessed_stream_max_length = 0;
+    uint32_t subblocks_compessed_stream_max_length = 0;
+
     vector<char*> thread_all_streams;
     vector<char*> thread_case_mask;
     vector<char*> thread_raw;
@@ -49,6 +55,12 @@ private:
         size_t block_start
     );
 
+    void validate_block_meta(const block_meta_t& block_meta);
+
+    static void validate_ffc_stats(const ffc_stats_t& ffc_stats);
+    static void read_ffc_header(istream* inStream, const ffc_header_t* ffc_header);
+    static void read_block_meta_data(istream* inStream, const block_meta_t* block_meta);
+
 public:
     FASTA_Decompress() {
         init_LUT();
@@ -59,9 +71,6 @@ public:
     }
 
     void decompress_parallel(string input_filename, string output_file);
-
-    static void read_ffc_header(istream* inStream, const ffc_header_t* ffc_header);
-    static void read_block_meta_data(istream* inStream, const block_meta_t* block_meta);
 
 };
 

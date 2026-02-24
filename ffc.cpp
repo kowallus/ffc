@@ -8,7 +8,7 @@
 #include "FASTA_Compress.h"
 #include "FASTA_Decompress.h"
 
-#define OPTION_NOT_SET -1
+#define OPTION_NOT_SET (-1)
 #define DEF_NUM_COMPRESSION_THREADS 12
 #define DEF_NUM_DECOMPRESSION_THREADS 4
 
@@ -25,7 +25,7 @@ void printVersion() {
               << static_cast<int>(major) << "." 
               << static_cast<int>(minor) << "." 
               << patch
-              << ", (c) Sz. Grabowski, T. Kowalski, R. Susik, 2025" << std::endl;
+              << ", (c) Sz. Grabowski, T. Kowalski, R. Susik, 2026" << std::endl;
 }
 
 bool outputFileOk(const std::string &outputFile, const std::string &inputFile, bool forceOverwrite) {
@@ -58,10 +58,11 @@ int main(int argc, char *argv[]) {
     std::string inputFile, outputFile;
     bool 
         decompressFlag = false, 
-        forceOverwriteFlag = false;
+        forceOverwriteFlag = false,
+        disableLongMatchingFlag = false;
     int level = OPTION_NOT_SET, blockSize = OPTION_NOT_SET, thread = OPTION_NOT_SET;
 
-    int maxNumThreads = std::thread::hardware_concurrency();
+    int maxNumThreads = static_cast<int>(std::thread::hardware_concurrency());
     int defNumCompressionThreads = maxNumThreads < DEF_NUM_COMPRESSION_THREADS ?
         maxNumThreads : DEF_NUM_COMPRESSION_THREADS;
     int defNumDecompressionThreads = maxNumThreads < DEF_NUM_DECOMPRESSION_THREADS ?
@@ -77,6 +78,7 @@ int main(int argc, char *argv[]) {
         ->check(CLI::Range(0, 22));
     app.add_option("-b,--block", blockSize, "Block size order, default: " + std::to_string(DEFAULT_BLOCK_SIZE_ORDER))
         ->check(CLI::Range(20, 30));
+    app.add_flag("-D,--disable-long", disableLongMatchingFlag, "Disable backend long distance matching");
     app.add_option("-t,--threads", thread, "Number of threads, default: " + std::to_string(defNumCompressionThreads)
         + "c / " + std::to_string(defNumDecompressionThreads) + "d")
         ->check(CLI::PositiveNumber);
@@ -121,8 +123,8 @@ int main(int argc, char *argv[]) {
         (decompressFlag ? defNumDecompressionThreads : defNumCompressionThreads) : thread;
 
     if (decompressFlag) {
-        if (level != OPTION_NOT_SET || blockSize != OPTION_NOT_SET) {
-            std::cerr << "Error: Compression options (-l, -b) are not allowed in decompression mode" << std::endl;
+        if (level != OPTION_NOT_SET || blockSize != OPTION_NOT_SET || disableLongMatchingFlag) {
+            std::cerr << "Error: Compression options (-l, -b, -D) are not allowed in decompression mode" << std::endl;
             return EXIT_FAILURE;
         }
         if (outputFile.empty()) {
@@ -150,7 +152,7 @@ int main(int argc, char *argv[]) {
         if (blockSize == OPTION_NOT_SET) {
             blockSize = DEFAULT_BLOCK_SIZE_ORDER;
         }
-        compress(inputFile, outputFile, level, blockSize);
+        compress(inputFile, outputFile, level, blockSize, !disableLongMatchingFlag);
     }
 
     return EXIT_SUCCESS;

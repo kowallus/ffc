@@ -95,8 +95,13 @@ We do not recommend a value greater than 4 in most cases.
 
 FFC works on equal-length blocks (the last block of the input may be shorter). The default block size is $2^{22}$ bytes = 4 MiBytes. This parameter can be changed with
 `-b` or `--block`
-followed by an integer from the range \[20, 30\] (we point out that, for technical reasons, -b 30 corresponds to $2^{30} - 1$, not $2^{30}$ bytes!).
+followed by an integer from the range \[20, 30\] (we point out that, for technical reasons, -b 30 corresponds to $2^{30} - 64$, not $2^{30}$ bytes!).
 Using large blocks is beneficial for the compression ratio on redundant data (e.g., bacterial genome collections), but requires more memory and may be slower as it might limit the number of threads working in parallel.
+
+By default, FFC enables the backend long distance matching algorithm. This can be disabled with the 
+`-D` or `--disable-long`
+flag. 
+Compression of highly redundant short sequences (e.g., virus strains) in high compression levels may perform better without it.
 
 By default, FFC uses 12 threads for compression and 4 threads for decompression. This parameter can be set with:
 `-t` or `--threads`
@@ -122,6 +127,7 @@ Here's a rundown of the options:
   -o,          --output FNAME                 Output file 
   -l,          --level [0 - 22]               Backend compr. level, default: adaptive 
   -b,          --block [20 - 30]              Block size order, default: 22 
+  -D,          --disable-long                 Disable backend long distance matching   
   -t,          --threads                      Number of threads, default: 12c / 4d 
   -v,          --version                      Show version information 
 ```

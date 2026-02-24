@@ -1,6 +1,5 @@
 #include "helper.h"
 
-#include "byteswap.h"
 #include <sys/stat.h>
 #include <regex>
 
@@ -542,6 +541,18 @@ int PgHelpers::readsSufPreCmp(const char* suffixPart, const char* prefixRead) {
             return -1;
     }
     return 0;
+}
+
+static __inline unsigned short
+bswap_16 (unsigned short __x)
+{
+    return (__x >> 8) | (__x << 8);
+}
+
+static __inline unsigned int
+bswap_32 (unsigned int __x)
+{
+    return (bswap_16 (__x & 0xffff) << 16) | (bswap_16 (__x >> 16));
 }
 
 int PgHelpers::strcmplcp(const char* lStrPtr, const char* rStrPtr, int length) {
